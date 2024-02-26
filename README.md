@@ -1,4 +1,4 @@
-# WoKas
+# WoKaS
 
 Instructions for running the R codes to download karst spring discharge datasets on windows
 
