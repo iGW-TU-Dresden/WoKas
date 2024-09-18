@@ -1,6 +1,5 @@
 # Author: Tunde Olarinoye
 # Institute: University of Freiburg, Germany
-# Email: tunde.olarinoye@hydmod.uni-freiburg.de
 
 Sys.setenv(language = "en")
 
