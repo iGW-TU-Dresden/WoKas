@@ -84,5 +84,3 @@ Sci Data 7, 59 (2020). https://doi.org/10.1038/s41597-019-0346-5
 Please contact:
 
 Andreas Hartmann | andreas.hartmann@tu-dresden.de
-
-Maria Alejandra Vela | maria_alejandra.vela_castillo1@mailbox.tu-dresden.de
