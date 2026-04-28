@@ -1,127 +1,194 @@
 # R code for downloading spring (karst) discharge 
-# observations from eHYD online data portal, Austria
-# Author: Tunde Olarinoye
-# Institute: University of Freiburg, Germany
+# observations from new eHYD package download, Austria
 
-Sys.setenv(LANGUAGE="en")
+Sys.setenv(LANGUAGE = "en")
 
 library(XML)
 library(httr)
 
-basePath = "./"
-sourceModule = paste0(basePath, 'sourceModules/')
-source(paste0(sourceModule, 'fileIO.R'))
+basePath <- "./"
+sourceModule <- paste0(basePath, "sourceModules/")
+source(paste0(sourceModule, "fileIO.R"))
 
 ##==============================================================
-##                          SECTION 1                         ==   
-##    Download spring discharge datasets from eHYD database   ==
+## SECTION 1: Download full eHYD spring discharge package
 ##==============================================================
-# url link to download data
-# the base url requires additional query string
-baseUrl <- "https://ehyd.gv.at/eHYD/MessstellenExtraData/qu?id=" 
 
-# eHYD station names and IDs
-wokasRDS <- readRDS(paste0(sourceModule,"/station_info.rds"))
+downloadUrl <- "https://gis.lfrz.gv.at/api/ehyd/messstellen/paket/ehyd_messstellen_all_qu.zip"
+
+wokasRDS <- readRDS(paste0(sourceModule, "/station_info.rds"))
 stationInfo <- subset(wokasRDS, ISO == "AT" & Source_type == "O")
 
-# create folder to download datasets
-outfolder <- paste0(basePath,"tmp_eHYD")
-dir.create(outfolder)
-
-# for each eHYD station
-for (i in 1:nrow(stationInfo)) {
-  # get download url link
-  downloadUrl <- sprintf(paste0(baseUrl,"%s&file=3"),stationInfo$Local_database_ID[i])
-  
-  # use http GET request to to access page redirect for download 
-  getData <- GET(downloadUrl, progress())
-  
-  # check for download request error
-  if(getData$status!=200) {
-    cat("problem while requesting download :(")
-    next
-  }
-  
-  # create file name
-  fileName <- paste0(stationInfo$Local_database_ID[i], '@', stationInfo$Name[i], '.csv')
-  
-  # download dataset
-  download.file(downloadUrl, destfile = paste0(outfolder, "/", fileName), mode = "wb", quiet = F)
+outfolder <- paste0(basePath, "tmp_eHYD")
+if (!dir.exists(outfolder)) {
+  dir.create(outfolder, recursive = TRUE)
 }
 
+zipfile <- file.path(outfolder, "ehyd_messstellen_all_qu.zip")
+
+cat("Downloading eHYD spring discharge package...\n")
+download.file(downloadUrl, destfile = zipfile, mode = "wb", quiet = FALSE)
+
+cat("Unzipping package...\n")
+unzip(zipfile, exdir = outfolder)
+
+unlink(zipfile)
+
 ##==========================================================
-##                        SECTION 2                       ==
-##    Format downloaded datasets and homogenization       ==
+## SECTION 2: Format downloaded datasets and homogenization
 ##==========================================================
 
-# list downloaded csv files in directory
-dataFiles <- list.files(outfolder, pattern = '.csv')
+dataFiles <- list.files(
+  outfolder,
+  pattern = "\\.csv$",
+  recursive = TRUE,
+  full.names = TRUE
+)
 
-# for every csv file in baseFile dir
-for(i in 1:length(dataFiles)){
-  #i=1
+if (length(dataFiles) == 0) {
+  stop("No CSV files found after unzipping the eHYD package.")
+}
+
+cat("Found", length(dataFiles), "CSV files.\n")
+
+dms2dec <- function(angle) {
+  angle <- as.character(angle)
+  angle <- gsub("[°'\"NSEW]", " ", angle)
+  angle <- gsub(",", ".", angle)
+  angle <- trimws(angle)
   
-  skip_no <- grep("Werte:",readLines(paste0(outfolder, "/", dataFiles[i])))
-  if(length(skip_no)==0)
-    next
+  x <- strsplit(angle, "\\s+")
   
-  #read csv file
-  springData <- read.csv(paste0(outfolder, "/", dataFiles[i]), sep = ";", header = F, dec = ',', 
-                         stringsAsFactors = F, skip = skip_no, encoding = "UTF-8")[,1:2]
-  colnames(springData) = c("date", "discharge")
-  
-  # Convert encoding of the discharge column to UTF-8
-  springData$discharge <- iconv(springData$discharge, to = "UTF-8", sub = "byte") # delete non-numeric values
-  
-  # Replace non-numeric values
-  springData$discharge <- gsub("[^0-9.]+", "", springData$discharge) # delete non-numeric values
-  
-  springData$discharge <- gsub("L<fc>cke", "", springData$discharge)
-  
-  # select, rename and convert discharge observations to m3/s
-  springData$discharge <- as.numeric(gsub(",",".",springData$discharge)) * 0.001
-  
-  # read csv file to extract coordinates
-  r <- grep("Geographische", readLines(paste0(outfolder, "/", dataFiles[i])))
-  if(r>0){
-    coordData <- read.csv(paste0(outfolder, "/", dataFiles[i]), sep = ";", header = T, dec = ',', stringsAsFactors = F, skip=r, nrows=1, col.names=c("timestamp","lon","lat"))
+  sapply(x, function(y) {
+    y <- as.numeric(y)
+    y <- y[!is.na(y)]
     
-    # convert cordinates from dms to dec
-    dms2dec <- function(angle) {
-      angle <- as.character(angle)
-      x <- do.call(rbind, strsplit(angle, split=' '))
-      x <- apply(x, 1L, function(y) {
-        y <- as.numeric(y)
-        y[1] + y[2]/60 + y[3]/3600
-      })
-      return(x)
+    if (length(y) >= 3) {
+      y[1] + y[2] / 60 + y[3] / 3600
+    } else if (length(y) == 1) {
+      y[1]
+    } else {
+      NA_real_
     }
-    lon <- dms2dec(coordData$lon)
-    lat <- dms2dec(coordData$lat)
-    
-  }else{
-    lon <- NULL
-    lat <- NULL
+  })
+}
+
+for (i in seq_along(dataFiles)) {
+  
+  file_path <- dataFiles[i]
+  file_base <- basename(file_path)
+  
+  cat("Processing:", file_base, "\n")
+  
+  lines <- readLines(file_path, warn = FALSE, encoding = "UTF-8")
+  
+  skip_no <- grep("Werte:", lines)
+  if (length(skip_no) == 0) {
+    cat("  skipped: no 'Werte:' section found\n")
+    next
   }
   
-  # create metadata list
-  ehydID = unlist(strsplit(dataFiles[i],"@"))[1]
-  wokasMeta <- subset(stationInfo, Local_database_ID == ehydID)
+  springData <- tryCatch({
+    read.csv(
+      file_path,
+      sep = ";",
+      header = FALSE,
+      dec = ",",
+      stringsAsFactors = FALSE,
+      skip = skip_no[1],
+      encoding = "UTF-8"
+    )[, 1:2]
+  }, error = function(e) {
+    cat("  skipped: cannot read data table\n")
+    return(NULL)
+  })
   
-  metaData <- list(id = as.character(ehydID),
-                   newID = wokasMeta$Location.Identifier,
-                   name = wokasMeta$Name,
-                   source = "eHYD Bundesministerium Nachhaltigkeit und Tourismus",
-                   sourceUrl = "https://ehyd.gv.at/#",
-                   LAT = lat,
-                   LON = lon,
-                   unit = "m^3/s")
+  if (is.null(springData)) next
+  
+  colnames(springData) <- c("date", "discharge")
+  
+  springData$discharge <- iconv(
+    springData$discharge,
+    to = "UTF-8",
+    sub = "byte"
+  )
+  
+  springData$discharge <- gsub(",", ".", springData$discharge)
+  springData$discharge <- gsub("[^0-9.-]+", "", springData$discharge)
+  springData$discharge <- as.numeric(springData$discharge) * 0.001
+  
+  r <- grep("Geographische", lines)
+  
+  if (length(r) > 0) {
+    coordData <- tryCatch({
+      read.csv(
+        file_path,
+        sep = ";",
+        header = TRUE,
+        dec = ",",
+        stringsAsFactors = FALSE,
+        skip = r[1],
+        nrows = 1,
+        col.names = c("timestamp", "lon", "lat")
+      )
+    }, error = function(e) NULL)
+    
+    if (!is.null(coordData)) {
+      lon <- dms2dec(coordData$lon)
+      lat <- dms2dec(coordData$lat)
+    } else {
+      lon <- NA_real_
+      lat <- NA_real_
+    }
+  } else {
+    lon <- NA_real_
+    lat <- NA_real_
+  }
+  
+  id_candidates <- regmatches(
+    file_base,
+    gregexpr("[0-9]+", file_base)
+  )[[1]]
+  
+  ehydID <- NA_character_
+  
+  for (candidate in id_candidates) {
+    if (candidate %in% as.character(stationInfo$Local_database_ID)) {
+      ehydID <- candidate
+      break
+    }
+  }
+  
+  if (is.na(ehydID)) {
+    cat("  skipped: station ID not found in station_info.rds\n")
+    next
+  }
+  
+  wokasMeta <- subset(
+    stationInfo,
+    as.character(Local_database_ID) == as.character(ehydID)
+  )
+  
+  if (nrow(wokasMeta) == 0) {
+    cat("  skipped: no matching WoKaS metadata\n")
+    next
+  }
+  
+  metaData <- list(
+    id = as.character(ehydID),
+    newID = wokasMeta$Location.Identifier[1],
+    name = wokasMeta$Name[1],
+    source = "eHYD Bundesministerium Nachhaltigkeit und Tourismus",
+    sourceUrl = "https://ehyd.gv.at/#",
+    LAT = lat,
+    LON = lon,
+    unit = "m^3/s"
+  )
   
   fileIO.writeSpringData(springData, metaData)
 }
 
-#remove the original csv file
-unlink(outfolder, recursive = T)
+unlink(outfolder, recursive = TRUE)
 
-## end --
+cat("Finished processing eHYD Austria spring discharge data.\n")
 
